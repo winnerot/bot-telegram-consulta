@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # TOKEN DE TELEGRAM
-TOKEN = "TU_TOKEN_AQUI"
+TOKEN = "8828583094:AAHRdTseIjTnNJgjfmU_hi-yPqL9uhFRm-A"
 
 
 # Servidor HTTP ficticio para cumplir el requisito del plan Free de Render
