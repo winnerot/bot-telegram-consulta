@@ -1,11 +1,13 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import http.server
 import logging
-import re
 import os
+import re
 import socketserver
 import threading
 import urllib3
+
 from bs4 import BeautifulSoup
 import requests
 from telegram import Update
@@ -17,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-# Desactivar advertencias de SSL
+# Desactivar advertencias SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configurar logs
@@ -27,16 +29,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# TOKEN DE TELEGRAM
-TOKEN = "8828583094:AAHRdTseIjTnNJgjfmU_hi-yPqL9uhFRm-A"
+# Configuración de hilos para consultas
+executor = ThreadPoolExecutor(max_workers=4)
+
+# ==============================================================================
+# TOKEN DE TU BOT DE TELEGRAM
+# ==============================================================================
+TOKEN = "TU_TOKEN_DE_TELEGRAM_AQUI"
 
 
-# Servidor HTTP adaptable al puerto de Render
+# ==============================================================================
+# SERVIDOR HTTP PARA PLAN FREE EN RENDER
+# ==============================================================================
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
 
     class SimpleHandler(http.server.SimpleHTTPRequestHandler):
-
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
@@ -45,13 +53,17 @@ def run_dummy_server():
         def log_message(self, format, *args):
             return
 
-    # Permitir reuso de dirección para evitar "Address already in use"
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("0.0.0.0", port), SimpleHandler) as server:
-        server.serve_forever()
+    try:
+        with socketserver.TCPServer(("0.0.0.0", port), SimpleHandler) as server:
+            server.serve_forever()
+    except Exception as e:
+        logger.error(f"Error en servidor HTTP auxiliar: {e}")
 
 
-# ----------------------------------------- DEF SENIAT ---------------------------------
+# ==============================================================================
+# CONSULTA SENIAT
+# ==============================================================================
 def consultar_seniat(cedula: str) -> str:
     url = f"http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do?personalidad=1&ci={cedula}"
     headers = {
@@ -59,7 +71,7 @@ def consultar_seniat(cedula: str) -> str:
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
 
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
@@ -128,12 +140,16 @@ def consultar_seniat(cedula: str) -> str:
         else:
             return f"❌ Error del servidor SENIAT: {response.status_code}"
 
+    except requests.exceptions.Timeout:
+        return "⚠️ SENIAT: Tiempo de espera agotado (Servidor caído o IP bloqueada)."
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error de conexión SENIAT: {e}")
-        return "❌ Error de conexión con el servidor del SENIAT."
+        logger.error(f"Error SENIAT: {e}")
+        return "❌ SENIAT: Error de conexión."
 
 
-# ----------------------------------------- DEF IVSS ---------------------------------
+# ==============================================================================
+# CONSULTA IVSS
+# ==============================================================================
 def consultar_ivss(cedula: str) -> str:
     url_base = "http://www.ivss.gob.ve:28083/CuentaIndividualIntranet/"
     url_accion = (
@@ -149,7 +165,7 @@ def consultar_ivss(cedula: str) -> str:
         }
 
         session = requests.Session()
-        session.get(url_base, headers=headers, timeout=15, verify=False)
+        session.get(url_base, headers=headers, timeout=5, verify=False)
 
         payload = {
             "Accion": "",
@@ -160,7 +176,7 @@ def consultar_ivss(cedula: str) -> str:
         }
 
         response = session.post(
-            url_accion, data=payload, headers=headers, timeout=15, verify=False
+            url_accion, data=payload, headers=headers, timeout=5, verify=False
         )
 
         if response.status_code == 200:
@@ -229,15 +245,19 @@ def consultar_ivss(cedula: str) -> str:
         else:
             return f"❌ Error del servidor IVSS: {response.status_code}"
 
+    except requests.exceptions.Timeout:
+        return "⚠️ IVSS: Tiempo de espera agotado (Servidor caído, puerto 28083 bloqueado o IP de Render bloqueada)."
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error de conexión: {e}")
-        return "❌ Error de conexión con el servidor del IVSS."
+        logger.error(f"Error IVSS: {e}")
+        return "❌ IVSS: Error de conexión."
 
 
-# ----------------------------------------------------- PROCESADOR GENERAL -----------------------------
+# ==============================================================================
+# PROCESADOR UNIFICADO
+# ==============================================================================
 def procesar_todas_las_consultas(cedula: str) -> str:
-    resultado_ivss = consultar_ivss(cedula)
     resultado_seniat = consultar_seniat(cedula)
+    resultado_ivss = consultar_ivss(cedula)
 
     reporte = "📋 **REPORTE CONSOLIDADO DE CONSULTAS**\n"
     reporte += f"🆔 **Cédula analizada:** `{cedula}`\n"
@@ -250,7 +270,9 @@ def procesar_todas_las_consultas(cedula: str) -> str:
     return reporte
 
 
-# ----------------------------------------------------- COMANDOS Y MANEJADORES -----------------------------
+# ==============================================================================
+# MANEJADORES DE TELEGRAM
+# ==============================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     await update.message.reply_text(
@@ -277,9 +299,14 @@ async def manejar_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 Consultando la cédula **{texto_usuario}**, por favor espera..."
     )
 
-    resultado = await asyncio.to_thread(
-        procesar_todas_las_consultas, texto_usuario
-    )
+    loop = asyncio.get_running_loop()
+    try:
+        resultado = await loop.run_in_executor(
+            executor, procesar_todas_las_consultas, texto_usuario
+        )
+    except Exception as err:
+        logger.error(f"Error en ejecución: {err}")
+        resultado = "❌ Ocurrió un error interno procesando la consulta."
 
     await context.bot.edit_message_text(
         chat_id=update.effective_chat.id,
@@ -289,8 +316,11 @@ async def manejar_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ==============================================================================
+# EJECUCIÓN PRINCIPAL
+# ==============================================================================
 def main():
-    # Iniciar servidor HTTP ficticio para Render
+    # Iniciar servidor web secundario en segundo plano para Render Free
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
