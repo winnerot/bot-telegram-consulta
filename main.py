@@ -2,6 +2,7 @@ import asyncio
 import http.server
 import logging
 import re
+import os
 import socketserver
 import threading
 import urllib3
@@ -30,9 +31,12 @@ logger = logging.getLogger(__name__)
 TOKEN = "8828583094:AAHRdTseIjTnNJgjfmU_hi-yPqL9uhFRm-A"
 
 
-# Servidor HTTP ficticio para cumplir el requisito del plan Free de Render
+# Servidor HTTP adaptable al puerto de Render
 def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+
     class SimpleHandler(http.server.SimpleHTTPRequestHandler):
+
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
@@ -41,8 +45,10 @@ def run_dummy_server():
         def log_message(self, format, *args):
             return
 
-    server = socketserver.TCPServer(("0.0.0.0", 10000), SimpleHandler)
-    server.serve_forever()
+    # Permitir reuso de dirección para evitar "Address already in use"
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("0.0.0.0", port), SimpleHandler) as server:
+        server.serve_forever()
 
 
 # ----------------------------------------- DEF SENIAT ---------------------------------
@@ -284,7 +290,7 @@ async def manejar_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # Iniciar servidor HTTP en un hilo secundario para el plan Free
+    # Iniciar servidor HTTP ficticio para Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
