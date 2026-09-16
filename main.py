@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import http.server
 import logging
 import os
+import urllib.parse
 import re
 import socketserver
 import threading
@@ -41,7 +42,7 @@ TOKEN = "8828583094:AAHRdTseIjTnNJgjfmU_hi-yPqL9uhFRm-A"
 # ==============================================================================
 # TOKEN DE SCRAPPIN
 # ==============================================================================
-SCRAPINGANT_API_KEY = "d9a1806b9069429c8b160dd0ff1a22be"
+SCRAPER_API_KEY = "0b6f876e025b41ef39bbdbb6b503bf77"
 
 
 
@@ -74,12 +75,15 @@ def run_dummy_server():
 def consultar_seniat(cedula: str) -> str:
     target_url = f"http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do?personalidad=1&ci={cedula}"
     
-    # Enrutamos la consulta a través de ScrapingAnt
-    api_url = f"https://api.scrapingant.com/v2/general?api_key={SCRAPINGANT_API_KEY}&url={target_url}"
+    # Codificamos la URL del SENIAT
+    url_encoded = urllib.parse.quote(target_url, safe='')
+    
+    # Configuramos ScraperAPI para que use proxy residencial (country_code=ve fuerza la IP venezolana)
+    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={url_encoded}&render=false"
 
     try:
-        # Aumentamos el timeout a 15-20 segundos porque el proxy procesa la petición
-        response = requests.get(api_url, timeout=20)
+        # Se asignan 25 segundos ya que la rotación de proxy residencial requiere un poco más de tiempo
+        response = requests.get(api_url, timeout=25)
 
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
@@ -146,14 +150,13 @@ def consultar_seniat(cedula: str) -> str:
 
             return resultado.strip()
         else:
-            return f"❌ Error del proxy/SENIAT (Código {response.status_code})"
+            return f"❌ Error de conexión al SENIAT (Código HTTP {response.status_code})."
 
     except requests.exceptions.Timeout:
-        return "⚠️ SENIAT: El proxy agotó el tiempo de espera al consultar la página."
+        return "⚠️ SENIAT: El proxy agotó el tiempo de espera."
     except requests.exceptions.RequestException as e:
         logger.error(f"Error SENIAT: {e}")
-        return "❌ SENIAT: Error de conexión."
-
+        return "❌ SENIAT: Error en la petición HTTP."
 
 # ==============================================================================
 # CONSULTA IVSS
